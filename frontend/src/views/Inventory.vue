@@ -10,16 +10,17 @@
 
     <div class="panel">
       <div class="filter-row">
-        <el-select v-model="filters.brand" placeholder="品牌" clearable style="width: 140px" @change="load(1)">
+        <el-select v-model="filters.brand" placeholder="品牌" clearable aria-label="品牌筛选" style="width: 140px" @change="load(1)">
           <el-option v-for="brand in brands" :key="brand" :label="brand" :value="brand" />
         </el-select>
-        <el-select v-model="filters.sheet" placeholder="渠道" clearable filterable style="width: 180px" @change="load(1)">
+        <el-select v-model="filters.sheet" placeholder="渠道" clearable filterable aria-label="渠道筛选" style="width: 180px" @change="load(1)">
           <el-option v-for="name in sheets" :key="name" :label="name" :value="name" />
         </el-select>
         <el-input
           v-model="filters.sku"
           placeholder="商品编码"
           clearable
+          aria-label="搜索商品编码"
           style="width: 220px"
           @keyup.enter="load(1)"
           @clear="load(1)"
@@ -27,7 +28,7 @@
         <el-button type="primary" @click="load(1)">查询</el-button>
       </div>
 
-      <el-table v-loading="loading" :data="items" size="small">
+      <el-table v-loading="loading" :data="items" size="small" empty-text="没有符合条件的库存记录">
         <el-table-column prop="sku" label="商品编码" min-width="170" />
         <el-table-column prop="name" label="商品名称" min-width="220" show-overflow-tooltip />
         <el-table-column prop="brand" label="品牌" width="100" />
@@ -36,6 +37,9 @@
           <template #default="{ row }">
             <span :class="{ 'warn-text': Number(row.inventory) <= threshold }">{{ row.inventory }}</span>
           </template>
+        </el-table-column>
+        <el-table-column label="在途" width="100" align="right">
+          <template #default="{ row }">{{ row.in_transit ?? '-' }}</template>
         </el-table-column>
         <el-table-column label="操作" width="90" fixed="right">
           <template #default="{ row }">
@@ -135,7 +139,7 @@ onMounted(() => {
 }
 
 .warn-text {
-  color: #d93026;
+  color: var(--qoc-warning);
   font-weight: 600;
 }
 </style>

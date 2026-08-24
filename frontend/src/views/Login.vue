@@ -1,11 +1,16 @@
 <template>
   <div class="login-wrap">
     <div class="login-panel">
-      <div class="login-title">QOC 商品管理</div>
-      <div class="login-sub">库存 · 销量 · 数据导入</div>
+      <div class="login-brand">
+        <div class="brand-mark">Q</div>
+        <div>
+          <div class="login-title">QOC 商品管理</div>
+          <div class="login-sub">库存 · 销量 · 数据导入</div>
+        </div>
+      </div>
       <el-form @submit.prevent="submit">
         <el-form-item>
-          <el-input v-model="form.username" placeholder="账号" size="large">
+          <el-input v-model="form.username" placeholder="账号" size="large" aria-label="账号">
             <template #prefix><el-icon><User /></el-icon></template>
           </el-input>
         </el-form-item>
@@ -16,6 +21,7 @@
             placeholder="密码"
             size="large"
             show-password
+            aria-label="密码"
             @keyup.enter="submit"
           >
             <template #prefix><el-icon><Lock /></el-icon></template>
@@ -73,5 +79,20 @@ async function submit() {
 
 .login-error {
   margin-top: 16px;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.login-title {
+  margin-bottom: 2px;
+}
+
+.login-sub {
+  margin-bottom: 0;
 }
 </style>

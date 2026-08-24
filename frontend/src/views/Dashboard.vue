@@ -1,5 +1,5 @@
 <template>
-  <div v-loading="loading" element-loading-text="加载中...">
+  <div v-loading="loading" element-loading-text="加载中..." :aria-busy="loading">
     <div class="page-head">
       <div>
         <div class="page-title">仪表盘</div>
@@ -15,22 +15,34 @@
 
     <div class="stat-grid">
       <div class="stat-box">
-        <div class="stat-label">主仓库存</div>
+        <div class="stat-head">
+          <span class="stat-label">主仓库存</span>
+          <el-icon class="stat-icon"><Box /></el-icon>
+        </div>
         <div class="stat-value">{{ formatNum(summary.total_inventory) }}</div>
         <div class="stat-sub">实际可用数合计</div>
       </div>
       <div class="stat-box">
-        <div class="stat-label">昨日销量</div>
+        <div class="stat-head">
+          <span class="stat-label">在途</span>
+          <el-icon class="stat-icon"><Box /></el-icon>
+        </div>
+        <div class="stat-value">{{ formatNum(summary.total_in_transit) }}</div>
+        <div class="stat-sub">各渠道在途合计</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-head">
+          <span class="stat-label">昨日销量</span>
+          <el-icon class="stat-icon"><TrendCharts /></el-icon>
+        </div>
         <div class="stat-value">{{ formatNum(summary.total_yesterday) }}</div>
         <div class="stat-sub">各渠道合计</div>
       </div>
       <div class="stat-box">
-        <div class="stat-label">7 天销量</div>
-        <div class="stat-value">{{ formatNum(summary.total_seven) }}</div>
-        <div class="stat-sub">各渠道合计</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-label">低库存预警</div>
+        <div class="stat-head">
+          <span class="stat-label">低库存预警</span>
+          <el-icon class="stat-icon"><Warning /></el-icon>
+        </div>
         <div class="stat-value warning-value">{{ summary.low_stock_count }}</div>
         <div class="stat-sub">低于预警阈值的 SKU 数</div>
       </div>
@@ -62,7 +74,8 @@
       <el-col :xs="24" :lg="10">
         <div class="panel">
           <div class="panel-title">低库存预警</div>
-          <el-table :data="summary.low_stock" size="small" max-height="420">
+          <el-empty v-if="!summary.low_stock?.length" description="暂无低库存预警" :image-size="70" />
+          <el-table v-else :data="summary.low_stock" size="small" max-height="420">
             <el-table-column prop="sku" label="商品编码" min-width="150" />
             <el-table-column prop="brand" label="品牌" width="90" />
             <el-table-column label="库存" width="90" align="right">
@@ -72,7 +85,6 @@
             </el-table-column>
             <el-table-column prop="sheet_name" label="来源" width="130" />
           </el-table>
-          <el-empty v-if="!summary.low_stock?.length" description="暂无预警" :image-size="70" />
         </div>
       </el-col>
     </el-row>
@@ -81,13 +93,14 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import { UploadFilled } from '@element-plus/icons-vue'
+import { Box, TrendCharts, UploadFilled, Warning } from '@element-plus/icons-vue'
 import api from '../api'
 
 const loading = ref(false)
 const summary = reactive({
   latest_date: null,
   total_inventory: 0,
+  total_in_transit: 0,
   total_yesterday: 0,
   total_seven: 0,
   total_thirty: 0,
@@ -120,11 +133,11 @@ onMounted(load)
 }
 
 .warning-value {
-  color: #d93026;
+  color: var(--qoc-warning);
 }
 
 .warn-text {
-  color: #d93026;
+  color: var(--qoc-warning);
   font-weight: 600;
 }
 </style>

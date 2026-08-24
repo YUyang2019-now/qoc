@@ -10,6 +10,7 @@ from ..models import StagingRow
 from ..sheet_schemas import (
     DATA_COLUMNS,
     DATA_SHEETS,
+    NEW_CHANNEL_SCHEMAS,
     PRODUCT_FIELDS,
     PRODUCT_SHEETS,
     REPEATED_INVENTORY_HEADERS,
@@ -18,6 +19,7 @@ from ..sheet_schemas import (
 FILENAME_DATE_RE = re.compile(
     r"(\d{4})[.\-_/年]?(\d{1,2})[.\-_/月]?(\d{1,2})"
 )
+SHORT_DATE_RE = re.compile(r"(?<!\d)(\d{1,2})[.\-_/月](\d{1,2})(?!\d)")
 DATE_HEADER_RE = re.compile(r"^\d{1,2}[.\-/月]\d{1,2}(日)?(销量)?$")
 
 
@@ -60,7 +62,17 @@ def detect_date_from_filename(filename: str):
     match = FILENAME_DATE_RE.search(filename)
     if match:
         return f"{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+    short_match = SHORT_DATE_RE.search(filename)
+    if short_match:
+        return f"{date.today().year:04d}-{int(short_match.group(1)):02d}-{int(short_match.group(2)):02d}"
     return date.today().isoformat()
+
+
+def detect_channel_from_filename(filename: str):
+    for channel, spec in NEW_CHANNEL_SCHEMAS.items():
+        if all(keyword in filename for keyword in spec.get("keywords", [])):
+            return channel
+    return None
 
 
 def find_column(headers, aliases):
@@ -309,6 +321,89 @@ def parse_workbook(path, snapshot_date=None, include_master=False):
     return snapshot_date, sheet_summaries, parsed_rows
 
 
+def parse_channel_workbook(path, channel, snapshot_date):
+    spec = NEW_CHANNEL_SCHEMAS.get(channel)
+    if not spec:
+        raise ValueError(f"未配置渠道 {channel} 的解析规则")
+    wb = open_workbook(path)
+    try:
+        sheets = {ws.title.strip(): ws for ws in wb.worksheets}
+        merged = {}
+        sheet_summaries = []
+        for sheet_spec in spec.get("sheets", []):
+            ws = sheets.get(sheet_spec["sheet"])
+            if ws is None:
+                continue
+            headers = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+            key_idx = find_column(headers, sheet_spec.get("key", []))
+            if key_idx is None:
+                continue
+            inventory_idx = find_column(headers, sheet_spec.get("inventory", []))
+            in_transit_idx = find_column(headers, sheet_spec.get("in_transit", []))
+            yesterday_idx = find_column(headers, sheet_spec.get("yesterday", []))
+            seven_idx = find_column(headers, sheet_spec.get("seven", []))
+            thirty_idx = find_column(headers, sheet_spec.get("thirty", []))
+            count = 0
+            for row_number, row in enumerate(
+                ws.iter_rows(min_row=2, values_only=True), start=2
+            ):
+                if not any(value is not None for value in row):
+                    continue
+                key_value = row[key_idx]
+                if key_value is None:
+                    continue
+                sku = str(key_value).strip()
+                if not sku:
+                    continue
+                item = merged.setdefault(
+                    sku,
+                    {
+                        "inventory": None,
+                        "in_transit": None,
+                        "yesterday_sales": None,
+                        "seven_sales": None,
+                        "thirty_sales": None,
+                    },
+                )
+                if inventory_idx is not None and item["inventory"] is None:
+                    item["inventory"] = parse_number(row[inventory_idx])
+                if in_transit_idx is not None and item["in_transit"] is None:
+                    item["in_transit"] = parse_number(row[in_transit_idx])
+                if yesterday_idx is not None and item["yesterday_sales"] is None:
+                    item["yesterday_sales"] = parse_number(row[yesterday_idx])
+                if seven_idx is not None and item["seven_sales"] is None:
+                    item["seven_sales"] = parse_number(row[seven_idx])
+                if thirty_idx is not None and item["thirty_sales"] is None:
+                    item["thirty_sales"] = parse_number(row[thirty_idx])
+                count += 1
+            sheet_summaries.append(
+                {
+                    "sheet_name": sheet_spec["sheet"],
+                    "kind": "data",
+                    "row_count": count,
+                }
+            )
+    finally:
+        wb.close()
+    rows = [
+        {
+            "sheet_name": channel,
+            "row_number": index,
+            "kind": "data",
+            "date": snapshot_date,
+            "sku": sku,
+            "inventory": values["inventory"],
+            "in_transit": values["in_transit"],
+            "yesterday_sales": values["yesterday_sales"],
+            "seven_sales": values["seven_sales"],
+            "thirty_sales": values["thirty_sales"],
+            "raw_json": json.dumps(values, ensure_ascii=False),
+        }
+        for index, (sku, values) in enumerate(sorted(merged.items()), start=2)
+    ]
+    return sheet_summaries, rows
+
+
 def store_staging(db, token, rows):
     master_rows = [r for r in rows if r["kind"] == "master"]
     data_rows = [r for r in rows if r["kind"] != "master"]
@@ -323,6 +418,7 @@ def store_staging(db, token, rows):
                 "date": row["date"],
                 "sku": row["sku"],
                 "inventory": row["inventory"],
+                "in_transit": row.get("in_transit"),
                 "yesterday_sales": row["yesterday_sales"],
                 "seven_sales": row["seven_sales"],
                 "thirty_sales": row["thirty_sales"],
@@ -345,6 +441,7 @@ def store_staging(db, token, rows):
                 "date": row["date"],
                 "sku": row["sku"],
                 "inventory": None,
+                "in_transit": None,
                 "yesterday_sales": None,
                 "seven_sales": None,
                 "thirty_sales": None,

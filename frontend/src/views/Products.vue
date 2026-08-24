@@ -14,19 +14,20 @@
           v-model="filters.search"
           placeholder="搜索条形码 / 货号 / 名称 / 规格"
           clearable
+          aria-label="搜索商品"
           style="width: 300px"
           @keyup.enter="load(1)"
           @clear="load(1)"
         >
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
-        <el-select v-model="filters.brand" placeholder="品牌" clearable style="width: 160px" @change="load(1)">
+        <el-select v-model="filters.brand" placeholder="品牌" clearable aria-label="品牌筛选" style="width: 160px" @change="load(1)">
           <el-option v-for="brand in brands" :key="brand" :label="brand" :value="brand" />
         </el-select>
         <el-button type="primary" @click="load(1)">查询</el-button>
       </div>
 
-      <el-table v-loading="loading" :data="items" size="small">
+      <el-table v-loading="loading" :data="items" size="small" empty-text="没有符合条件的商品">
         <el-table-column prop="brand" label="品牌" width="100" />
         <el-table-column prop="sheet_name" label="来源表" width="150" />
         <el-table-column prop="barcode" label="条形码" min-width="130" />

@@ -11,7 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .auth import hash_password
 from .config import DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USER
-from .db import Base, SessionLocal, engine
+from .db import Base, SessionLocal, engine, upgrade_schema
 from .models import Setting, User
 from .routes import router
 from .services.cleanup import run_cleanup_once
@@ -52,6 +52,7 @@ async def cleanup_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    upgrade_schema()
     seed_defaults()
     task = asyncio.create_task(cleanup_loop())
     try:

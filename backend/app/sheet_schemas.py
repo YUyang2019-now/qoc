@@ -193,6 +193,46 @@ DATA_COLUMNS = {
 
 REPEATED_INVENTORY_HEADERS = {"合肥库存", "库存", "合计库存"}
 
+NEW_CHANNEL_SCHEMAS = {
+    "猫人自营": {
+        "keywords": ["猫人", "自营"],
+        "sheets": [
+            {
+                "sheet": "2026年8月",
+                "key": ["条码"],
+                "inventory": ["现货库存"],
+                "in_transit": ["在途"],
+                "yesterday": ["昨日总销售量"],
+                "seven": ["7日总销售量"],
+                "thirty": ["30日总销售"],
+            }
+        ],
+    },
+    "猫人唯品会": {
+        "keywords": ["猫人", "唯品"],
+        "sheets": [
+            {
+                "sheet": "Sheet1",
+                "key": ["主条码"],
+                "inventory": [],
+                "in_transit": [],
+                "yesterday": ["昨天销量"],
+                "seven": ["7天销量"],
+                "thirty": ["30天销量"],
+            },
+            {
+                "sheet": "1",
+                "key": ["条码"],
+                "inventory": ["在售库存"],
+                "in_transit": [],
+                "yesterday": [],
+                "seven": [],
+                "thirty": [],
+            },
+        ],
+    },
+}
+
 PRODUCT_FIELDS = {
     "barcode": ["条形码"],
     "product_code": ["产品编号"],

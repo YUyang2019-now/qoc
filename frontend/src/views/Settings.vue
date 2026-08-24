@@ -127,6 +127,7 @@ onMounted(load)
 .setting-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 14px;
   color: #4a5560;
 }

@@ -3,6 +3,7 @@ import io
 import json
 import re
 import secrets
+import threading
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -22,12 +23,14 @@ from .auth import (
 )
 from .cache import cache_get, cache_invalidate, cache_set
 from .config import UPLOAD_DIR
-from .db import get_db
+from .db import SessionLocal, get_db
 from .models import ImportBatch, Product, Session as SessionModel, Setting, SnapshotRow, StagingRow, User
 from .services.cleanup import cleanup_old_snapshots, get_retention_days
 from .services.importer import (
+    detect_channel_from_filename,
     detect_date_from_filename,
     discard_staging,
+    parse_channel_workbook,
     parse_workbook,
     store_staging,
 )
@@ -129,6 +132,13 @@ def brands(db: Session = Depends(get_db)):
     return {"brands": brands}
 
 
+@router.get("/meta/suppliers")
+def suppliers(db: Session = Depends(get_db)):
+    rows = db.query(Product.supplier).distinct().all()
+    suppliers = sorted({r[0] for r in rows if r[0]})
+    return {"suppliers": suppliers}
+
+
 @router.get("/meta/sheets")
 def sheets():
     return {
@@ -149,6 +159,7 @@ def dashboard_summary(user: User = Depends(get_current_user), db: Session = Depe
         payload = {
             "latest_date": None,
             "total_inventory": 0,
+            "total_in_transit": 0,
             "total_yesterday": 0,
             "total_seven": 0,
             "total_thirty": 0,
@@ -168,6 +179,12 @@ def dashboard_summary(user: User = Depends(get_current_user), db: Session = Depe
     )
     total_yesterday = (
         db.query(func.sum(SnapshotRow.yesterday_sales))
+        .filter(SnapshotRow.date == latest)
+        .scalar()
+        or 0
+    )
+    total_in_transit = (
+        db.query(func.sum(SnapshotRow.in_transit))
         .filter(SnapshotRow.date == latest)
         .scalar()
         or 0
@@ -250,6 +267,7 @@ def dashboard_summary(user: User = Depends(get_current_user), db: Session = Depe
     payload = {
         "latest_date": latest,
         "total_inventory": round(total_inventory or 0, 2),
+        "total_in_transit": round(total_in_transit or 0, 2),
         "total_yesterday": round(total_yesterday or 0, 2),
         "total_seven": round(total_seven or 0, 2),
         "total_thirty": round(total_thirty or 0, 2),
@@ -398,6 +416,7 @@ def list_inventory(
                 "sheet_name": row.sheet_name,
                 "brand": SHEET_BRAND.get(row.sheet_name, ""),
                 "inventory": row.inventory,
+                "in_transit": row.in_transit,
                 "name": product_name(db, row.sku),
                 "date": row.date,
             }
@@ -521,6 +540,8 @@ def sales_trend(
 @router.get("/styles")
 def list_styles(
     search: str = "",
+    brand: str = "",
+    supplier: str = "",
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     user: User = Depends(get_current_user),
@@ -541,6 +562,10 @@ def list_styles(
                 Product.color.like(like),
             )
         )
+    if brand:
+        query = query.filter(Product.brand == brand)
+    if supplier:
+        query = query.filter(Product.supplier == supplier)
     rows = query.all()
     grouped: dict[str, list] = {}
     for row in rows:
@@ -605,7 +630,7 @@ def list_styles(
     return {"total": total, "items": items, "latest_date": latest}
 
 
-@router.get("/styles/{product_code}")
+@router.get("/styles/{product_code:path}")
 def style_detail(
     product_code: str,
     user: User = Depends(get_current_user),
@@ -642,12 +667,14 @@ def style_detail(
     def agg(rows):
         result = {
             "inventory": 0,
+            "in_transit": 0,
             "yesterday_sales": 0,
             "seven_sales": 0,
             "thirty_sales": 0,
         }
         for row in rows:
             result["inventory"] += row.inventory or 0
+            result["in_transit"] += row.in_transit or 0
             result["yesterday_sales"] += row.yesterday_sales or 0
             result["seven_sales"] += row.seven_sales or 0
             result["thirty_sales"] += row.thirty_sales or 0
@@ -661,12 +688,14 @@ def style_detail(
                 snap_row.sheet_name,
                 {
                     "inventory": 0,
+                    "in_transit": 0,
                     "yesterday_sales": 0,
                     "seven_sales": 0,
                     "thirty_sales": 0,
                 },
             )
             channel["inventory"] += snap_row.inventory or 0
+            channel["in_transit"] += snap_row.in_transit or 0
             channel["yesterday_sales"] += snap_row.yesterday_sales or 0
             channel["seven_sales"] += snap_row.seven_sales or 0
             channel["thirty_sales"] += snap_row.thirty_sales or 0
@@ -726,13 +755,143 @@ def style_detail(
     }
 
 
+PARSE_TASKS: dict[str, dict] = {}
+PARSE_TASKS_LOCK = threading.Lock()
+
+
+def _update_parse_task(task_id: str, **fields):
+    with PARSE_TASKS_LOCK:
+        task = PARSE_TASKS.setdefault(task_id, {})
+        task.update(fields)
+
+
+def _prune_parse_tasks():
+    with PARSE_TASKS_LOCK:
+        if len(PARSE_TASKS) <= 200:
+            return
+        for task_id in [
+            key
+            for key, task in PARSE_TASKS.items()
+            if task.get("status") in ("done", "error")
+        ]:
+            PARSE_TASKS.pop(task_id, None)
+
+
+def _run_parse_task(
+    task_id,
+    token,
+    target,
+    original_name,
+    channel_name,
+    snapshot_date,
+    include_master,
+    user_id,
+):
+    db = SessionLocal()
+    try:
+        _update_parse_task(task_id, status="parsing", progress=10, stage="开始解析")
+        known_barcodes = {row[0] for row in db.query(Product.barcode).all()}
+        if channel_name:
+            _update_parse_task(task_id, progress=30, stage="读取渠道表格")
+            sheet_summaries, rows = parse_channel_workbook(
+                target, channel_name, snapshot_date
+            )
+            import_format = "channel"
+        else:
+            _update_parse_task(task_id, progress=30, stage="读取工作簿")
+            snapshot_date, sheet_summaries, rows = parse_workbook(
+                target,
+                snapshot_date=snapshot_date,
+                include_master=include_master,
+            )
+            import_format = "workbook"
+        if not rows:
+            raise ValueError("没有识别到可导入的数据 sheet")
+
+        _update_parse_task(task_id, progress=70, stage="统计与生成预览")
+        stats = {
+            "with_inventory": sum(
+                1 for row in rows if row.get("inventory") is not None
+            ),
+            "with_in_transit": sum(
+                1 for row in rows if row.get("in_transit") is not None
+            ),
+            "with_sales": sum(
+                1
+                for row in rows
+                if row.get("yesterday_sales") is not None
+                or row.get("seven_sales") is not None
+                or row.get("thirty_sales") is not None
+            ),
+            "unmatched": sum(
+                1 for row in rows if row["sku"] not in known_barcodes
+            ),
+        }
+        samples = [
+            {
+                "sku": row["sku"],
+                "inventory": row.get("inventory"),
+                "in_transit": row.get("in_transit"),
+                "yesterday_sales": row.get("yesterday_sales"),
+                "seven_sales": row.get("seven_sales"),
+                "thirty_sales": row.get("thirty_sales"),
+            }
+            for row in rows[:5]
+        ]
+
+        _update_parse_task(task_id, progress=85, stage="保存预览数据")
+        store_staging(db, token, rows)
+        batch = ImportBatch(
+            token=token,
+            filename=original_name,
+            file_size=target.stat().st_size,
+            import_date=snapshot_date,
+            channel=channel_name,
+            status="preview",
+            summary_json=json_body(
+                {
+                    "date": snapshot_date,
+                    "sheets": sheet_summaries,
+                    "total_rows": len(rows),
+                    "include_master": include_master,
+                    "channel": channel_name,
+                    "format": import_format,
+                }
+            ),
+            created_by=user_id,
+        )
+        db.add(batch)
+        db.commit()
+
+        result = {
+            "token": token,
+            "filename": original_name,
+            "date": snapshot_date,
+            "channel": channel_name,
+            "format": import_format,
+            "total_rows": len(rows),
+            "sheets": sheet_summaries,
+            "include_master": include_master,
+            "stats": stats,
+            "samples": samples,
+        }
+        _update_parse_task(
+            task_id, status="done", progress=100, stage="解析完成", result=result
+        )
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        _update_parse_task(task_id, status="error", error=str(exc))
+    finally:
+        db.close()
+
+
 @router.post("/imports/upload")
 async def upload_import(
     file: UploadFile,
     include_master: bool = False,
     date: str = "",
+    channel: str = "",
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
 ):
     original_name = file.filename or "未命名.xlsx"
     if not original_name.lower().endswith((".xlsx", ".xlsm", ".xls")):
@@ -746,46 +905,52 @@ async def upload_import(
             out.write(chunk)
             size += len(chunk)
 
-    try:
-        snapshot_date, sheet_summaries, rows = parse_workbook(
+    snapshot_date = date if date else detect_date_from_filename(original_name)
+    channel_name = channel or detect_channel_from_filename(original_name)
+    task_id = secrets.token_urlsafe(16)
+    _prune_parse_tasks()
+    with PARSE_TASKS_LOCK:
+        PARSE_TASKS[task_id] = {
+            "user_id": user.id,
+            "status": "queued",
+            "progress": 0,
+            "stage": "等待解析",
+        }
+    threading.Thread(
+        target=_run_parse_task,
+        args=(
+            task_id,
+            token,
             target,
-            snapshot_date=date if date else detect_date_from_filename(original_name),
-            include_master=include_master,
-        )
-    except Exception as exc:
-        target.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=f"文件解析失败：{exc}") from exc
-
-    if not rows:
-        target.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="没有识别到可导入的数据 sheet")
-
-    store_staging(db, token, rows)
-    batch = ImportBatch(
-        token=token,
-        filename=original_name,
-        file_size=size,
-        import_date=snapshot_date,
-        status="preview",
-        summary_json=json_body(
-            {
-                "date": snapshot_date,
-                "sheets": sheet_summaries,
-                "total_rows": len(rows),
-                "include_master": include_master,
-            }
+            original_name,
+            channel_name,
+            snapshot_date,
+            include_master,
+            user.id,
         ),
-        created_by=user.id,
-    )
-    db.add(batch)
-    db.commit()
+        daemon=True,
+    ).start()
     return {
-        "token": token,
+        "task_id": task_id,
         "filename": original_name,
-        "date": snapshot_date,
-        "total_rows": len(rows),
-        "sheets": sheet_summaries,
-        "include_master": include_master,
+    }
+
+
+@router.get("/imports/parse-progress/{task_id}")
+def parse_progress(
+    task_id: str,
+    user: User = Depends(get_current_user),
+):
+    with PARSE_TASKS_LOCK:
+        task = PARSE_TASKS.get(task_id)
+    if not task or task.get("user_id") != user.id:
+        raise HTTPException(status_code=404, detail="解析任务不存在")
+    return {
+        "status": task.get("status"),
+        "progress": task.get("progress", 0),
+        "stage": task.get("stage", ""),
+        "result": task.get("result"),
+        "error": task.get("error"),
     }
 
 
@@ -809,14 +974,16 @@ def confirm_import(db: Session, token: str):
     db.flush()
     import_id = batch.id
 
-    previous_imports = (
-        select(ImportBatch.id)
-        .where(
-            ImportBatch.import_date == batch.import_date,
-            ImportBatch.status == "done",
+    sheet_names = {
+        row.sheet_name for row in staging if row.kind != "master"
+    }
+    if sheet_names:
+        db.execute(
+            delete(SnapshotRow).where(
+                SnapshotRow.date == batch.import_date,
+                SnapshotRow.sheet_name.in_(sheet_names),
+            )
         )
-    )
-    db.execute(delete(SnapshotRow).where(SnapshotRow.import_id.in_(previous_imports)))
 
     master_rows = [row for row in staging if row.kind == "master"]
     for row in master_rows:
@@ -868,6 +1035,7 @@ def confirm_import(db: Session, token: str):
                 "date": row.date,
                 "sku": row.sku,
                 "inventory": row.inventory,
+                "in_transit": row.in_transit,
                 "yesterday_sales": row.yesterday_sales,
                 "seven_sales": row.seven_sales,
                 "thirty_sales": row.thirty_sales,
@@ -888,9 +1056,25 @@ def confirm_import(db: Session, token: str):
 @router.post("/imports/{token}/confirm")
 def confirm_import_endpoint(
     token: str,
+    channel: str = "",
+    date: str = "",
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if channel:
+        db.query(StagingRow).filter(StagingRow.token == token).update(
+            {"sheet_name": channel}
+        )
+        batch = db.query(ImportBatch).filter(ImportBatch.token == token).first()
+        if batch:
+            batch.channel = channel
+        db.commit()
+    if date:
+        db.query(StagingRow).filter(StagingRow.token == token).update({"date": date})
+        batch = db.query(ImportBatch).filter(ImportBatch.token == token).first()
+        if batch:
+            batch.import_date = date
+        db.commit()
     batch = confirm_import(db, token)
     return {"ok": True, "import_id": batch.id, "filename": batch.filename}
 
@@ -925,6 +1109,7 @@ def list_imports(user: User = Depends(get_current_user), db: Session = Depends(g
                 "filename": row.filename,
                 "file_size": row.file_size,
                 "import_date": row.import_date,
+                "channel": row.channel,
                 "status": row.status,
                 "summary": read_json(row.summary_json),
                 "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -1054,6 +1239,7 @@ def export_data(
                     "品牌": SHEET_BRAND.get(row.sheet_name, ""),
                     "商品编码": row.sku,
                     "库存": row.inventory,
+                    "在途": row.in_transit,
                     "昨日销量": row.yesterday_sales,
                     "7天销量": row.seven_sales,
                     "30天销量": row.thirty_sales,

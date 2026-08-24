@@ -5,6 +5,7 @@
         <div class="page-title">款详情</div>
         <div class="page-desc">{{ latestDate ? `最新数据日期：${latestDate}` : '暂无数据' }}</div>
       </div>
+      <el-button v-if="detail" text type="primary" @click="closeDetail">收起详情</el-button>
     </div>
 
     <div class="panel">
@@ -13,16 +14,39 @@
           v-model="filters.search"
           placeholder="搜索款号 / 条形码 / 名称 / 规格 / 颜色"
           clearable
+          aria-label="搜索款"
           style="width: 360px"
           @keyup.enter="load(1)"
           @clear="load(1)"
         >
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
+        <el-select
+          v-model="filters.brand"
+          placeholder="品牌"
+          clearable
+          filterable
+          aria-label="品牌筛选"
+          style="width: 150px"
+          @change="load(1)"
+        >
+          <el-option v-for="brand in brands" :key="brand" :label="brand" :value="brand" />
+        </el-select>
+        <el-select
+          v-model="filters.supplier"
+          placeholder="供应商"
+          clearable
+          filterable
+          aria-label="供应商筛选"
+          style="width: 170px"
+          @change="load(1)"
+        >
+          <el-option v-for="supplier in suppliers" :key="supplier" :label="supplier" :value="supplier" />
+        </el-select>
         <el-button type="primary" @click="load(1)">查询</el-button>
       </div>
 
-      <el-table v-loading="loading" :data="items" size="small">
+      <el-table v-loading="loading" :data="items" size="small" empty-text="没有匹配的款">
         <el-table-column prop="product_code" label="款号" min-width="140" />
         <el-table-column prop="name" label="产品名称" min-width="220" show-overflow-tooltip />
         <el-table-column prop="brand" label="品牌" width="110" />
@@ -59,7 +83,34 @@
       </div>
     </div>
 
-    <div v-if="detail" v-loading="detailLoading" class="detail-wrap">
+    <div v-if="detail" v-loading="detailLoading" id="style-detail" class="detail-wrap">
+      <div class="detail-stats">
+        <div class="mini-stat">
+          <span>SKU 数</span>
+          <strong>{{ detail.sku_count }}</strong>
+        </div>
+        <div class="mini-stat">
+          <span>库存合计</span>
+          <strong>{{ formatNum(detail.totals.inventory) }}</strong>
+        </div>
+        <div class="mini-stat">
+          <span>在途合计</span>
+          <strong>{{ formatNum(detail.totals.in_transit) }}</strong>
+        </div>
+        <div class="mini-stat">
+          <span>昨日销量</span>
+          <strong>{{ formatNum(detail.totals.yesterday_sales) }}</strong>
+        </div>
+        <div class="mini-stat">
+          <span>7 天销量</span>
+          <strong>{{ formatNum(detail.totals.seven_sales) }}</strong>
+        </div>
+        <div class="mini-stat">
+          <span>30 天销量</span>
+          <strong>{{ formatNum(detail.totals.thirty_sales) }}</strong>
+        </div>
+      </div>
+
       <div class="panel">
         <div class="panel-title">商品信息（{{ detail.product_code }}）</div>
         <el-descriptions :column="4" border size="small">
@@ -81,7 +132,7 @@
 
       <div class="panel">
         <div class="panel-title">款式明细（按主表结构）</div>
-        <el-table :data="detail.skus" size="small" border max-height="520">
+        <el-table :data="detail.skus" size="small" border max-height="520" empty-text="该款没有 SKU">
           <el-table-column prop="barcode" label="条形码" min-width="150" fixed />
           <el-table-column prop="name" label="产品名称" min-width="200" fixed show-overflow-tooltip />
           <el-table-column prop="spec" label="规格" width="90" fixed />
@@ -101,6 +152,9 @@
           >
             <el-table-column label="库存" width="100" align="right">
               <template #default="{ row }">{{ formatNum(row.channels[channel.sheet_name]?.inventory) }}</template>
+            </el-table-column>
+            <el-table-column label="在途" width="90" align="right">
+              <template #default="{ row }">{{ formatNum(row.channels[channel.sheet_name]?.in_transit) }}</template>
             </el-table-column>
             <el-table-column label="昨日" width="90" align="right">
               <template #default="{ row }">{{ formatNum(row.channels[channel.sheet_name]?.yesterday_sales) }}</template>
@@ -125,6 +179,11 @@
               <span :class="{ 'total-text': row.is_total }">{{ formatNum(row.inventory) }}</span>
             </template>
           </el-table-column>
+          <el-table-column label="在途" width="100" align="right">
+            <template #default="{ row }">
+              <span :class="{ 'total-text': row.is_total }">{{ formatNum(row.in_transit) }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="昨日" width="100" align="right">
             <template #default="{ row }">
               <span :class="{ 'total-text': row.is_total }">{{ formatNum(row.yesterday_sales) }}</span>
@@ -147,7 +206,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import api from '../api'
 
@@ -157,7 +216,9 @@ const page = ref(1)
 const pageSize = 20
 const loading = ref(false)
 const latestDate = ref('')
-const filters = reactive({ search: '' })
+const filters = reactive({ search: '', brand: '', supplier: '' })
+const brands = ref([])
+const suppliers = ref([])
 const detail = ref(null)
 const detailLoading = ref(false)
 
@@ -166,6 +227,7 @@ const activeChannels = computed(() => {
   return detail.value.channels.filter(
     (channel) =>
       channel.inventory ||
+      channel.in_transit ||
       channel.yesterday_sales ||
       channel.seven_sales ||
       channel.thirty_sales
@@ -181,6 +243,7 @@ const channelRows = computed(() => {
       brand: '',
       is_total: true,
       inventory: detail.value.totals.inventory,
+      in_transit: detail.value.totals.in_transit,
       yesterday_sales: detail.value.totals.yesterday_sales,
       seven_sales: detail.value.totals.seven_sales,
       thirty_sales: detail.value.totals.thirty_sales
@@ -208,9 +271,28 @@ async function openStyle(row) {
   try {
     const { data } = await api.get(`/api/styles/${encodeURIComponent(row.product_code)}`)
     detail.value = data
+    await nextTick()
+    document.getElementById('style-detail')?.scrollIntoView({
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      block: 'start'
+    })
   } finally {
     detailLoading.value = false
   }
+}
+
+function closeDetail() {
+  detail.value = null
+  window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+}
+
+async function loadMeta() {
+  const [{ data: brandData }, { data: supplierData }] = await Promise.all([
+    api.get('/api/meta/brands'),
+    api.get('/api/meta/suppliers')
+  ])
+  brands.value = brandData.brands
+  suppliers.value = supplierData.suppliers
 }
 
 function formatNum(value) {
@@ -218,7 +300,10 @@ function formatNum(value) {
   return num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
 }
 
-onMounted(() => load())
+onMounted(() => {
+  load()
+  loadMeta()
+})
 </script>
 
 <style scoped>
@@ -226,8 +311,49 @@ onMounted(() => load())
   margin-top: 14px;
 }
 
+.detail-stats {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.mini-stat {
+  background: #f4f8fd;
+  border: 1px solid var(--qoc-line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mini-stat span {
+  color: var(--qoc-muted);
+  font-size: 12px;
+}
+
+.mini-stat strong {
+  color: var(--qoc-ink);
+  font-size: 18px;
+  font-weight: 700;
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .total-text {
   font-weight: 700;
   color: #1f2937;
+}
+
+@media (max-width: 1100px) {
+  .detail-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .detail-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 </style>
