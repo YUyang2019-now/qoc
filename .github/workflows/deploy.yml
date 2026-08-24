@@ -5,6 +5,10 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      reset_admin_password:
+        description: '重置管理员密码（留空则不重置）'
+        required: false
 
 jobs:
   deploy:
@@ -104,11 +108,12 @@ jobs:
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
           ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
           QOC_IMAGE: ${{ env.QOC_IMAGE }}
+          RESET_ADMIN_PASSWORD: ${{ inputs.reset_admin_password }}
         with:
           host: 139.196.232.73
           username: root
           password: ${{ secrets.SERVER_PASSWORD }}
-          envs: GHCR_TOKEN,ACR_REGISTRY,ACR_USERNAME,ACR_PASSWORD,QOC_IMAGE
+          envs: GHCR_TOKEN,ACR_REGISTRY,ACR_USERNAME,ACR_PASSWORD,QOC_IMAGE,RESET_ADMIN_PASSWORD
           script: |
             if [ -n "$ACR_REGISTRY" ] && [ -n "$ACR_USERNAME" ]; then
               echo "$ACR_PASSWORD" | docker login "$ACR_REGISTRY" -u "$ACR_USERNAME" --password-stdin
@@ -118,3 +123,6 @@ jobs:
             cd /opt/qoc
             QOC_IMAGE="$QOC_IMAGE" docker compose pull
             QOC_IMAGE="$QOC_IMAGE" docker compose up -d
+            if [ -n "$RESET_ADMIN_PASSWORD" ]; then
+              docker exec -w /app/backend qoc python -m app.admin reset-admin "$RESET_ADMIN_PASSWORD"
+            fi
