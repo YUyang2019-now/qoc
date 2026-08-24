@@ -19,6 +19,7 @@ from .auth import (
     hash_password,
     verify_password,
 )
+from .cache import cache_get, cache_invalidate, cache_set
 from .config import UPLOAD_DIR
 from .db import get_db
 from .models import ImportBatch, Product, Session as SessionModel, Setting, SnapshotRow, StagingRow, User
@@ -138,9 +139,13 @@ def sheets():
 
 @router.get("/dashboard/summary")
 def dashboard_summary(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    cached = cache_get("dashboard_summary")
+    if cached is not None:
+        return cached
+
     latest = latest_date(db)
     if not latest:
-        return {
+        payload = {
             "latest_date": None,
             "total_inventory": 0,
             "total_yesterday": 0,
@@ -151,6 +156,8 @@ def dashboard_summary(user: User = Depends(get_current_user), db: Session = Depe
             "channel_summary": [],
             "import_count": 0,
         }
+        cache_set("dashboard_summary", payload)
+        return payload
 
     total_inventory = (
         db.query(func.sum(SnapshotRow.inventory))
@@ -239,7 +246,7 @@ def dashboard_summary(user: User = Depends(get_current_user), db: Session = Depe
         for name, inv, y, seven, thirty, count in channel_rows
     ]
     import_count = db.query(func.count(ImportBatch.id)).filter(ImportBatch.status == "done").scalar() or 0
-    return {
+    payload = {
         "latest_date": latest,
         "total_inventory": round(total_inventory or 0, 2),
         "total_yesterday": round(total_yesterday or 0, 2),
@@ -250,6 +257,8 @@ def dashboard_summary(user: User = Depends(get_current_user), db: Session = Depe
         "channel_summary": channel_summary,
         "import_count": import_count,
     }
+    cache_set("dashboard_summary", payload)
+    return payload
 
 
 def product_name(db: Session, sku: str):
@@ -663,6 +672,7 @@ def confirm_import(db: Session, token: str):
     discard_staging(db, token)
     db.commit()
     cleanup_old_snapshots(db)
+    cache_invalidate("dashboard_summary")
     return batch
 
 
@@ -755,6 +765,7 @@ def update_settings(
         db.add(Setting(key="snapshot_retention_days", value=str(retention_days)))
 
     db.commit()
+    cache_invalidate("dashboard_summary")
     return {
         "low_stock_threshold": threshold,
         "snapshot_retention_days": retention_days,
@@ -767,6 +778,7 @@ def cleanup_snapshots(
     db: Session = Depends(get_db),
 ):
     deleted, cutoff = cleanup_old_snapshots(db)
+    cache_invalidate("dashboard_summary")
     return {"deleted": deleted, "cutoff": cutoff}
 
 

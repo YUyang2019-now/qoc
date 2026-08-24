@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div v-loading="loading" element-loading-text="加载中...">
     <div class="page-head">
       <div>
         <div class="page-title">仪表盘</div>
@@ -80,10 +80,11 @@
 </template>
 
 <script setup>
-import { onMounted, reactive } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { UploadFilled } from '@element-plus/icons-vue'
 import api from '../api'
 
+const loading = ref(false)
 const summary = reactive({
   latest_date: null,
   total_inventory: 0,
@@ -96,8 +97,13 @@ const summary = reactive({
 })
 
 async function load() {
-  const { data } = await api.get('/api/dashboard/summary')
-  Object.assign(summary, data)
+  loading.value = true
+  try {
+    const { data } = await api.get('/api/dashboard/summary')
+    Object.assign(summary, data)
+  } finally {
+    loading.value = false
+  }
 }
 
 function formatNum(value) {
