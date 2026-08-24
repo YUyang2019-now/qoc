@@ -16,8 +16,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare image name
-        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:latest" >> "$GITHUB_ENV"
+      - name: Prepare image names
+        env:
+          ACR_ADDRESS: ${{ secrets.ACR_ADDRESS }}
+        run: |
+          GHCR_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+          echo "GHCR_IMAGE=$GHCR_IMAGE" >> "$GITHUB_ENV"
+          echo "IMAGE_TAGS=$GHCR_IMAGE" >> "$GITHUB_ENV"
+          echo "QOC_IMAGE=$GHCR_IMAGE" >> "$GITHUB_ENV"
+          if [ -n "$ACR_ADDRESS" ]; then
+            REGISTRY="${ACR_ADDRESS%%/*}"
+            echo "ACR_REGISTRY=$REGISTRY" >> "$GITHUB_ENV"
+            echo "IMAGE_TAGS=$GHCR_IMAGE,${ACR_ADDRESS}:latest" >> "$GITHUB_ENV"
+            echo "QOC_IMAGE=${ACR_ADDRESS}:latest" >> "$GITHUB_ENV"
+          fi
 
       - name: Setup buildx
         uses: docker/setup-buildx-action@v3
@@ -29,12 +41,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Login ACR
+        if: env.ACR_REGISTRY != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ env.IMAGE }}
+          tags: ${{ env.IMAGE_TAGS }}
 
       - name: Install rsync
         run: sudo apt-get update && sudo apt-get install -y rsync sshpass
@@ -45,6 +65,17 @@ jobs:
         run: |
           if [ -z "$PASS" ]; then
             echo "缺少 SERVER_PASSWORD Secret，请到仓库 Settings → Secrets 添加"
+            exit 1
+          fi
+
+      - name: Check ACR secrets
+        if: env.ACR_REGISTRY != ''
+        env:
+          USER: ${{ secrets.ACR_USERNAME }}
+          PASS: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          if [ -z "$USER" ] || [ -z "$PASS" ]; then
+            echo "ACR_ADDRESS 已配置，但缺少 ACR_USERNAME 或 ACR_PASSWORD"
             exit 1
           fi
 
@@ -67,13 +98,21 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACR_REGISTRY: ${{ env.ACR_REGISTRY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+          QOC_IMAGE: ${{ env.QOC_IMAGE }}
         with:
           host: 139.196.232.73
           username: root
           password: ${{ secrets.SERVER_PASSWORD }}
-          envs: GHCR_TOKEN
+          envs: GHCR_TOKEN,ACR_REGISTRY,ACR_USERNAME,ACR_PASSWORD,QOC_IMAGE
           script: |
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            if [ -n "$ACR_REGISTRY" ] && [ -n "$ACR_USERNAME" ]; then
+              echo "$ACR_PASSWORD" | docker login "$ACR_REGISTRY" -u "$ACR_USERNAME" --password-stdin
+            else
+              echo "$GHCR_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            fi
             cd /opt/qoc
-            docker compose pull
-            docker compose up -d
+            QOC_IMAGE="$QOC_IMAGE" docker compose pull
+            QOC_IMAGE="$QOC_IMAGE" docker compose up -d

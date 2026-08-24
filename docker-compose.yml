@@ -1,6 +1,6 @@
 services:
   qoc:
-    image: ghcr.io/yuyang2019-now/qoc:latest
+    image: ${QOC_IMAGE:-ghcr.io/yuyang2019-now/qoc:latest}
     build: .
     container_name: qoc
     ports:

@@ -19,6 +19,20 @@
 
 GitHub 会把系统打包成 Docker 镜像并推送到 GitHub 容器仓库，服务器直接拉取镜像启动，不再在服务器上安装后端依赖或执行 npm 构建。
 
+## 阿里云镜像仓库（国内拉取更快）
+
+如果从 GitHub 容器仓库拉取太慢，可以改用阿里云容器镜像服务：
+
+1. 打开阿里云控制台，搜索“容器镜像服务 ACR”，进入个人版。
+2. 在“访问凭证”里设置镜像仓库密码。
+3. 创建命名空间 `qoc`，再创建镜像仓库 `qoc`。
+4. 记下镜像仓库地址，例如 `registry.cn-shanghai.aliyuncs.com/qoc/qoc`。
+5. 在 GitHub 仓库的 Actions Secrets 里添加：
+   - `ACR_ADDRESS`：上面的镜像仓库地址
+   - `ACR_USERNAME`：阿里云账号用户名
+   - `ACR_PASSWORD`：镜像仓库密码
+6. 重新 `git push` 即可，服务器会直接从阿里云拉取镜像。
+
 ## 手动方式
 
 ## 1. 上传部署包
