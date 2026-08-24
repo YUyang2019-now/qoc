@@ -65,11 +65,15 @@ jobs:
 
       - name: Start service
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: 139.196.232.73
           username: root
           password: ${{ secrets.SERVER_PASSWORD }}
+          envs: GHCR_TOKEN
           script: |
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             cd /opt/qoc
             docker compose pull
             docker compose up -d
