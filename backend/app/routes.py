@@ -3,6 +3,7 @@ import io
 import json
 import re
 import secrets
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -514,6 +515,188 @@ def sales_trend(
             }
             for row in rows
         ],
+    }
+
+
+@router.get("/styles")
+def list_styles(
+    search: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Product).filter(
+        Product.product_code.isnot(None),
+        Product.product_code != "",
+    )
+    if search:
+        like = f"%{search}%"
+        query = query.filter(
+            or_(
+                Product.product_code.like(like),
+                Product.barcode.like(like),
+                Product.name.like(like),
+                Product.spec.like(like),
+                Product.color.like(like),
+            )
+        )
+    rows = query.all()
+    grouped: dict[str, list] = {}
+    for row in rows:
+        if row.product_code:
+            grouped.setdefault(row.product_code, []).append(row)
+
+    codes = sorted(grouped)
+    total = len(codes)
+    start = (page - 1) * page_size
+    page_codes = codes[start : start + page_size]
+
+    latest = latest_date(db)
+    barcodes = {
+        row.barcode
+        for code in page_codes
+        for row in grouped[code]
+        if row.barcode
+    }
+    snaps = []
+    if latest and barcodes:
+        snaps = (
+            db.query(SnapshotRow)
+            .filter(
+                SnapshotRow.date == latest,
+                SnapshotRow.sku.in_(barcodes),
+            )
+            .all()
+        )
+
+    items = []
+    for code in page_codes:
+        products = grouped[code]
+        first = products[0]
+        style_barcodes = {row.barcode for row in products if row.barcode}
+        inventory = 0
+        yesterday = 0
+        seven = 0
+        thirty = 0
+        for snap in snaps:
+            if snap.sku not in style_barcodes:
+                continue
+            inventory += snap.inventory or 0
+            yesterday += snap.yesterday_sales or 0
+            seven += snap.seven_sales or 0
+            thirty += snap.thirty_sales or 0
+        items.append(
+            {
+                "product_code": code,
+                "name": first.name,
+                "brand": first.brand,
+                "category": first.category,
+                "supplier": first.supplier,
+                "sku_count": len(products),
+                "inventory": round(inventory, 2),
+                "yesterday_sales": round(yesterday, 2),
+                "seven_sales": round(seven, 2),
+                "thirty_sales": round(thirty, 2),
+            }
+        )
+    return {"total": total, "items": items, "latest_date": latest}
+
+
+@router.get("/styles/{product_code}")
+def style_detail(
+    product_code: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    products = (
+        db.query(Product)
+        .filter(Product.product_code == product_code)
+        .order_by(Product.sheet_name, Product.row_number)
+        .all()
+    )
+    if not products:
+        raise HTTPException(status_code=404, detail="款不存在")
+
+    latest = latest_date(db)
+    barcodes = [row.barcode for row in products if row.barcode]
+    snaps = []
+    if latest and barcodes:
+        snaps = (
+            db.query(SnapshotRow)
+            .filter(
+                SnapshotRow.date == latest,
+                SnapshotRow.sku.in_(barcodes),
+            )
+            .all()
+        )
+
+    sku_snaps: dict[str, list] = defaultdict(list)
+    channel_snaps: dict[str, list] = defaultdict(list)
+    for snap in snaps:
+        sku_snaps[snap.sku].append(snap)
+        channel_snaps[snap.sheet_name].append(snap)
+
+    def agg(rows):
+        result = {
+            "inventory": 0,
+            "yesterday_sales": 0,
+            "seven_sales": 0,
+            "thirty_sales": 0,
+        }
+        for row in rows:
+            result["inventory"] += row.inventory or 0
+            result["yesterday_sales"] += row.yesterday_sales or 0
+            result["seven_sales"] += row.seven_sales or 0
+            result["thirty_sales"] += row.thirty_sales or 0
+        return result
+
+    skus = []
+    for row in products:
+        channels = {}
+        for sheet_name, snap_rows in sku_snaps.get(row.barcode or "", {}).items():
+            channels[sheet_name] = agg(snap_rows)
+        skus.append(
+            {
+                "barcode": row.barcode,
+                "name": row.name,
+                "spec": row.spec,
+                "color": row.color,
+                "sale_price": row.sale_price,
+                "purchase_price": row.purchase_price,
+                "status": row.status,
+                "channels": channels,
+            }
+        )
+
+    channels = [
+        {
+            "sheet_name": sheet_name,
+            "brand": SHEET_BRAND.get(sheet_name, ""),
+            **agg(channel_snaps.get(sheet_name, [])),
+        }
+        for sheet_name in DATA_SHEETS
+    ]
+    totals = {key: round(value, 2) for key, value in agg(snaps).items()}
+    first = products[0]
+    return {
+        "product_code": product_code,
+        "name": first.name,
+        "brand": first.brand,
+        "category": first.category,
+        "supplier": first.supplier,
+        "grade": first.grade,
+        "status": first.status,
+        "packaging": first.packaging,
+        "material": first.material,
+        "notes": first.notes,
+        "sale_price": first.sale_price,
+        "purchase_price": first.purchase_price,
+        "sku_count": len(products),
+        "latest_date": latest,
+        "skus": skus,
+        "channels": channels,
+        "totals": totals,
     }
 
 

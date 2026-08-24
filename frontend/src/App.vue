@@ -26,6 +26,10 @@
           <el-icon><TrendCharts /></el-icon>
           <span>销量</span>
         </el-menu-item>
+        <el-menu-item index="/styles">
+          <el-icon><View /></el-icon>
+          <span>款详情</span>
+        </el-menu-item>
         <el-menu-item index="/import">
           <el-icon><UploadFilled /></el-icon>
           <span>数据导入</span>
@@ -64,7 +68,8 @@ import {
   Setting,
   TrendCharts,
   UploadFilled,
-  User
+  User,
+  View
 } from '@element-plus/icons-vue'
 import api from './api'
 import Login from './views/Login.vue'
