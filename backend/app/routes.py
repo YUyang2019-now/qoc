@@ -582,6 +582,8 @@ def list_styles(
         for snap in snaps:
             if snap.sku not in style_barcodes:
                 continue
+            if snap.sheet_name not in DATA_SHEETS:
+                continue
             inventory += snap.inventory or 0
             yesterday += snap.yesterday_sales or 0
             seven += snap.seven_sales or 0
@@ -654,8 +656,20 @@ def style_detail(
     skus = []
     for row in products:
         channels = {}
-        for sheet_name, snap_rows in sku_snaps.get(row.barcode or "", {}).items():
-            channels[sheet_name] = agg(snap_rows)
+        for snap_row in sku_snaps.get(row.barcode or "", []):
+            channel = channels.setdefault(
+                snap_row.sheet_name,
+                {
+                    "inventory": 0,
+                    "yesterday_sales": 0,
+                    "seven_sales": 0,
+                    "thirty_sales": 0,
+                },
+            )
+            channel["inventory"] += snap_row.inventory or 0
+            channel["yesterday_sales"] += snap_row.yesterday_sales or 0
+            channel["seven_sales"] += snap_row.seven_sales or 0
+            channel["thirty_sales"] += snap_row.thirty_sales or 0
         skus.append(
             {
                 "barcode": row.barcode,
@@ -669,15 +683,27 @@ def style_detail(
             }
         )
 
+    sheet_order = [
+        name for name in PRODUCT_SHEETS if name in channel_snaps
+    ] + DATA_SHEETS + [
+        name
+        for name in channel_snaps
+        if name not in PRODUCT_SHEETS and name not in DATA_SHEETS
+    ]
     channels = [
         {
             "sheet_name": sheet_name,
             "brand": SHEET_BRAND.get(sheet_name, ""),
             **agg(channel_snaps.get(sheet_name, [])),
         }
-        for sheet_name in DATA_SHEETS
+        for sheet_name in sheet_order
     ]
-    totals = {key: round(value, 2) for key, value in agg(snaps).items()}
+    totals = {
+        key: round(value, 2)
+        for key, value in agg(
+            [snap for snap in snaps if snap.sheet_name in DATA_SHEETS]
+        ).items()
+    }
     first = products[0]
     return {
         "product_code": product_code,
