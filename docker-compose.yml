@@ -1,0 +1,14 @@
+services:
+  qoc:
+    build: .
+    container_name: qoc
+    ports:
+      - "80:8000"
+    environment:
+      QOC_DATA_DIR: /data
+      QOC_ADMIN_USER: ${QOC_ADMIN_USER:-admin}
+      QOC_ADMIN_PASSWORD: ${QOC_ADMIN_PASSWORD:-admin123}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
