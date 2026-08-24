@@ -55,6 +55,8 @@ jobs:
           context: .
           push: true
           tags: ${{ env.IMAGE_TAGS }}
+          provenance: false
+          sbom: false
 
       - name: Install rsync
         run: sudo apt-get update && sudo apt-get install -y rsync sshpass
