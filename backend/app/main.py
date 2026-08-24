@@ -3,9 +3,11 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .auth import hash_password
 from .config import DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USER
@@ -75,3 +77,16 @@ app.include_router(router)
 dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if dist.exists():
     app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def spa_fallback(request: Request, exc: StarletteHTTPException):
+    if (
+        exc.status_code == 404
+        and dist.exists()
+        and not request.url.path.startswith("/api")
+    ):
+        index = dist / "index.html"
+        if index.exists():
+            return FileResponse(index)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
