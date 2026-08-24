@@ -11,9 +11,7 @@
 把代码推送到 GitHub 后，可以配置成自动部署到阿里云服务器。
 
 1. 打开 GitHub 仓库的 Settings → Secrets and variables → Actions。
-2. 添加三个 Secret：
-   - `SERVER_HOST`：`139.196.232.73`
-   - `SERVER_USER`：`root`
+2. 添加一个 Secret：
    - `SERVER_PASSWORD`：阿里云服务器 root 密码
 3. 以后每次 `git push` 到 `main`，GitHub 会自动同步代码到服务器并启动系统。
 
